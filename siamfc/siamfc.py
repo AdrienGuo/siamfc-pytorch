@@ -1,26 +1,31 @@
 from __future__ import absolute_import, division, print_function
 
+import os
+import sys
+import time
+from collections import namedtuple
+
+import cv2
+import ipdb
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import numpy as np
-import time
-import cv2
-import sys
-import os
-from collections import namedtuple
+from got10k.trackers import Tracker
 from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.data import DataLoader
-from got10k.trackers import Tracker
+
+from utils import create_dir, save_img
+from utils.wandb import WandB
+from utils.average_meter import AverageMeter
 
 from . import ops
 from .backbones import AlexNetV1
+from .datasets import Pair
 from .heads import SiamFC
 from .losses import BalancedLoss
-from .datasets import Pair
 from .transforms import SiamFCTransforms
-
 
 __all__ = ['TrackerSiamFC']
 
@@ -85,7 +90,7 @@ class TrackerSiamFC(Tracker):
             'instance_sz': 255,
             'context': 0.5,
             # inference parameters
-            'scale_num': 3,
+            'scale_num': 1,
             'scale_step': 1.0375,
             'scale_lr': 0.59,
             'scale_penalty': 0.9745,
@@ -94,16 +99,16 @@ class TrackerSiamFC(Tracker):
             'response_up': 16,
             'total_stride': 8,
             # train parameters
-            'epoch_num': 50,
+            'epoch_num': 1000,
             'batch_size': 8,
-            'num_workers': 32,
+            'num_workers': 8,
             'initial_lr': 1e-2,
             'ultimate_lr': 1e-5,
             'weight_decay': 5e-4,
             'momentum': 0.9,
             'r_pos': 16,
             'r_neg': 0}
-        
+
         for key, val in kwargs.items():
             if key in cfg:
                 cfg.update({key: val})
@@ -115,6 +120,7 @@ class TrackerSiamFC(Tracker):
         self.net.eval()
 
         # convert box to 0-indexed and center based [y, x, h, w]
+        # box: [x1, y1, w, h] -> [cy, cx, h, w]
         box = np.array([
             box[1] - 1 + (box[3] - 1) / 2,
             box[0] - 1 + (box[2] - 1) / 2,
@@ -122,7 +128,9 @@ class TrackerSiamFC(Tracker):
         self.center, self.target_sz = box[:2], box[2:]
 
         # create hanning window
+        # 272 = 16 * 17
         self.upscale_sz = self.cfg.response_up * self.cfg.response_sz
+        # self.hann_window: (272, 272)
         self.hann_window = np.outer(
             np.hanning(self.upscale_sz),
             np.hanning(self.upscale_sz))
@@ -134,10 +142,13 @@ class TrackerSiamFC(Tracker):
             self.cfg.scale_num // 2, self.cfg.scale_num)
 
         # exemplar and search sizes
+        # context = 0.5 * (w+h)
         context = self.cfg.context * np.sum(self.target_sz)
+        # self.z_sz = ( (w + context) * (h + context) ) ^ (1/2)
         self.z_sz = np.sqrt(np.prod(self.target_sz + context))
         self.x_sz = self.z_sz * \
             self.cfg.instance_sz / self.cfg.exemplar_sz
+        ipdb.set_trace()
         
         # exemplar image
         self.avg_color = np.mean(img, axis=(0, 1))
@@ -149,10 +160,12 @@ class TrackerSiamFC(Tracker):
         # exemplar features
         z = torch.from_numpy(z).to(
             self.device).permute(2, 0, 1).unsqueeze(0).float()
+        # self.kernel: (1, 256, 6, 6)
         self.kernel = self.net.backbone(z)
+        self._save_crop(z, dir="template", name="z.jpg")
     
     @torch.no_grad()
-    def update(self, img):
+    def update(self, img, frame):
         # set to evaluation mode
         self.net.eval()
 
@@ -162,15 +175,20 @@ class TrackerSiamFC(Tracker):
             out_size=self.cfg.instance_sz,
             border_value=self.avg_color) for f in self.scale_factors]
         x = np.stack(x, axis=0)
+        # x: (scale_num, 3, 255, 255)
         x = torch.from_numpy(x).to(
             self.device).permute(0, 3, 1, 2).float()
+        self._save_crop(x, dir="search", name=f"{frame}.jpg")
         
         # responses
+        # x: (scale_num, 256, 22, 22)
         x = self.net.backbone(x)
+        # responses: (scale_num, 1, 17, 17)
         responses = self.net.head(self.kernel, x)
         responses = responses.squeeze(1).cpu().numpy()
 
         # upsample responses and penalize scale changes
+        # responses: (3, 272, 272)
         responses = np.stack([cv2.resize(
             u, (self.upscale_sz, self.upscale_sz),
             interpolation=cv2.INTER_CUBIC)
@@ -179,18 +197,22 @@ class TrackerSiamFC(Tracker):
         responses[self.cfg.scale_num // 2 + 1:] *= self.cfg.scale_penalty
 
         # peak scale
+        # scale_id: 在 scale_num 個裡面，最大的那個數 (選擇維度)
         scale_id = np.argmax(np.amax(responses, axis=(1, 2)))
 
         # peak location
         response = responses[scale_id]
         response -= response.min()
         response /= response.sum() + 1e-16
+        # response: (272, 272)
         response = (1 - self.cfg.window_influence) * response + \
             self.cfg.window_influence * self.hann_window
         loc = np.unravel_index(response.argmax(), response.shape)
 
         # locate target center
+        # disp_in_response: 在 self.upscale_sz，以 (135.5, 135.5) 當作中心點後，位置的比例
         disp_in_response = np.array(loc) - (self.upscale_sz - 1) / 2
+        # disp_in_instance: 改換到 self.scale_sz 上的比例後 (除以 response_up)，再乘上 total_stride 變成實際的位移
         disp_in_instance = disp_in_response * \
             self.cfg.total_stride / self.cfg.response_up
         disp_in_image = disp_in_instance * self.x_sz * \
@@ -205,6 +227,7 @@ class TrackerSiamFC(Tracker):
         self.x_sz *= scale
 
         # return 1-indexed and left-top based bounding box
+        # box: [x1, y1, w, h]
         box = np.array([
             self.center[1] + 1 - (self.target_sz[1] - 1) / 2,
             self.center[0] + 1 - (self.target_sz[0] - 1) / 2,
@@ -225,11 +248,11 @@ class TrackerSiamFC(Tracker):
             if f == 0:
                 self.init(img, box)
             else:
-                boxes[f, :] = self.update(img)
+                boxes[f, :] = self.update(img, f)
             times[f] = time.time() - begin
 
             if visualize:
-                ops.show_image(img, boxes[f, :])
+                ops.show_image(img, boxes[f, :], frame=f)
 
         return boxes, times
     
@@ -238,11 +261,14 @@ class TrackerSiamFC(Tracker):
         self.net.train(backward)
 
         # parse batch data
+        # z: (B, 3, 127, 127)
+        # x: (B, 3, 239, 239)
         z = batch[0].to(self.device, non_blocking=self.cuda)
         x = batch[1].to(self.device, non_blocking=self.cuda)
 
         with torch.set_grad_enabled(backward):
             # inference
+            # responses: (B, 1, 15, 15)
             responses = self.net(z, x)
 
             # calculate loss
@@ -256,6 +282,13 @@ class TrackerSiamFC(Tracker):
                 self.optimizer.step()
         
         return loss.item()
+
+    # def validation(self, loader):
+    #     self.net.eval()
+    #     for iter, batch in loader:
+    #         z = batch[0].to(self.device, non_blocking=self.cuda)
+    #         x = batch[1].to(self.device, non_blocking=self.cuda)
+    #         with torch.no_grad():
 
     @torch.enable_grad()
     def train_over(self, seqs, val_seqs=None,
@@ -275,6 +308,10 @@ class TrackerSiamFC(Tracker):
         dataset = Pair(
             seqs=seqs,
             transforms=transforms)
+        val_dataset = Pair(
+            seqs=val_seqs,
+            transforms=transforms
+        )
         
         # setup dataloader
         dataloader = DataLoader(
@@ -283,10 +320,21 @@ class TrackerSiamFC(Tracker):
             shuffle=True,
             num_workers=self.cfg.num_workers,
             pin_memory=self.cuda,
-            drop_last=True)
+            drop_last=True
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=self.cfg.batch_size,
+            shuffle=True,
+            num_workers=self.cfg.num_workers,
+            pin_memory=self.cuda,
+            drop_last=True
+        )
         
+        wandb = WandB(name="experiment", config=self.cfg._asdict())
         # loop over epochs
         for epoch in range(self.cfg.epoch_num):
+            train_loss = AverageMeter(name="Loss")
             # update lr at each epoch
             self.lr_scheduler.step(epoch=epoch)
 
@@ -295,13 +343,25 @@ class TrackerSiamFC(Tracker):
                 loss = self.train_step(batch, backward=True)
                 print('Epoch: {} [{}/{}] Loss: {:.5f}'.format(
                     epoch + 1, it + 1, len(dataloader), loss))
+                train_loss.update(val=loss)
                 sys.stdout.flush()
+            print("Training Summary:")
+            train_loss.display(type="avg")
             
+            # Validation
+            val_loss = AverageMeter(name="Loss")
+            for it, batch in enumerate(val_loader):
+                loss = self.train_step(batch, backward=False)
+                val_loss.update(val=loss)
+            print("Testing Summary:")
+            val_loss.display(type="avg")
+
+            wandb.upload(train_loss.avg, val_loss.avg, epoch=epoch+1)
             # save checkpoint
             if not os.path.exists(save_dir):
                 os.makedirs(save_dir)
             net_path = os.path.join(
-                save_dir, 'siamfc_alexnet_e%d.pth' % (epoch + 1))
+                save_dir, 'ckpt%d.pth' % (epoch + 1))
             torch.save(self.net.state_dict(), net_path)
     
     def _create_labels(self, size):
@@ -337,3 +397,11 @@ class TrackerSiamFC(Tracker):
         self.labels = torch.from_numpy(labels).to(self.device).float()
         
         return self.labels
+
+    def _save_crop(self, img, dir, name):
+        img = img.permute(0, 2, 3, 1).cpu().numpy().squeeze()
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        filedir = os.path.join("./results", "Basketball", dir)
+        create_dir(filedir)
+        filename = os.path.join(filedir, name)
+        save_img(img, filename)

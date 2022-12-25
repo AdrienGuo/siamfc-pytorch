@@ -1,9 +1,11 @@
 from __future__ import absolute_import, division
-
-import numpy as np
+import os
 import cv2
+import ipdb
+import numpy as np
 from torch.utils.data import Dataset
 
+from utils import save_img, create_dir
 
 __all__ = ['Pair']
 
@@ -16,6 +18,7 @@ class Pair(Dataset):
         self.seqs = seqs
         self.transforms = transforms
         self.pairs_per_seq = pairs_per_seq
+        # self.indices: “影片” 的 index
         self.indices = np.random.permutation(len(seqs))
         self.return_meta = getattr(seqs, 'return_meta', False)
 
@@ -51,7 +54,7 @@ class Pair(Dataset):
 
         item = (z, x, box_z, box_x)
         if self.transforms is not None:
-            item = self.transforms(*item)
+            item = self.transforms(*item, index)
         
         return item
     
@@ -61,6 +64,8 @@ class Pair(Dataset):
     def _sample_pair(self, indices):
         n = len(indices)
         assert n > 0
+        # Test the chances of overfitting.
+        return indices[0], indices[0]
 
         if n == 1:
             return indices[0], indices[0]

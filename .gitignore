@@ -1,3 +1,10 @@
+got10k/
+data/
+image_check/
+results/
+wandb/
+
+
 .*
 *.py[cod]
 *.log

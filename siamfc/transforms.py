@@ -1,12 +1,16 @@
 from __future__ import absolute_import, division
 
-import cv2
-import numpy as np
 import numbers
+
+import os
+import cv2
+import ipdb
+import numpy as np
 import torch
 
-from . import ops
+from utils.file_organizer import save_img, create_dir
 
+from . import ops
 
 __all__ = ['SiamFCTransforms']
 
@@ -109,7 +113,7 @@ class SiamFCTransforms(object):
             RandomCrop(instance_sz - 2 * 8),
             ToTensor()])
     
-    def __call__(self, z, x, box_z, box_x):
+    def __call__(self, z, x, box_z, box_x, index):
         z = self._crop(z, box_z, self.instance_sz)
         x = self._crop(x, box_x, self.instance_sz)
         z = self.transforms_z(z)

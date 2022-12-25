@@ -1,8 +1,13 @@
 from __future__ import absolute_import, division
 
-import torch.nn as nn
+import os
+
 import cv2
+import ipdb
 import numpy as np
+import torch.nn as nn
+
+from utils import create_dir, save_img
 
 
 def init_weights(model, gain=1):
@@ -29,7 +34,7 @@ def read_image(img_file, cvt_code=cv2.COLOR_BGR2RGB):
 
 def show_image(img, boxes=None, box_fmt='ltwh', colors=None,
                thickness=3, fig_n=1, delay=1, visualize=True,
-               cvt_code=cv2.COLOR_RGB2BGR):
+               cvt_code=cv2.COLOR_RGB2BGR, frame=1):
     if cvt_code is not None:
         img = cv2.cvtColor(img, cvt_code)
     
@@ -82,9 +87,13 @@ def show_image(img, boxes=None, box_fmt='ltwh', colors=None,
             img = cv2.rectangle(img, pt1, pt2, color.tolist(), thickness)
     
     if visualize:
-        winname = 'window_{}'.format(fig_n)
-        cv2.imshow(winname, img)
-        cv2.waitKey(delay)
+        # winname = 'window_{}'.format(fig_n)
+        # cv2.imshow(winname, img)
+        # cv2.waitKey(delay)
+        filedir = os.path.join("./results", "Basketball", "predict")
+        create_dir(filedir)
+        filename = os.path.join(filedir, f"{frame}.jpg")
+        save_img(img, filename)
 
     return img
 
@@ -95,14 +104,18 @@ def crop_and_resize(img, center, size, out_size,
                     interp=cv2.INTER_LINEAR):
     # convert box to corners (0-indexed)
     size = round(size)
+    # corners: [x1, y1, x2, y2] 要裁下來的範圍
     corners = np.concatenate((
         np.round(center - (size - 1) / 2),
         np.round(center - (size - 1) / 2) + size))
     corners = np.round(corners).astype(int)
 
     # pad image if necessary
+    # 檢查要裁下來的範圍 (corners) 有沒有超過原圖
+    # pads: [l, u, r, b] 代表四個方向要補多少的 pads
     pads = np.concatenate((
         -corners[:2], corners[2:] - img.shape[:2]))
+    # pads 如果是負數代表不用補
     npad = max(0, int(pads.max()))
     if npad > 0:
         img = cv2.copyMakeBorder(
