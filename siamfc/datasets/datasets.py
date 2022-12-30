@@ -1,11 +1,13 @@
 from __future__ import absolute_import, division
+
 import os
+
 import cv2
 import ipdb
 import numpy as np
 from torch.utils.data import Dataset
 
-from utils import save_img, create_dir
+from utils import create_dir, save_img
 
 __all__ = ['Pair']
 
@@ -54,8 +56,16 @@ class Pair(Dataset):
 
         item = (z, x, box_z, box_x)
         if self.transforms is not None:
-            item = self.transforms(*item, index)
-        
+            # 經過這裡 item 會變成 (z, x)
+            # box_z, box_x 不用的原因是他的物件都是在 “中心”
+            # 但其實並不是 “真的在中心”，因為 transforms 裡面會做 random_crop
+            # 我猜這樣做就和 SiamRPN++ 的 spatial aware sampling 類似概念
+            item = self.transforms(*item)
+
+        self._save_img(item[0], dir="template", name=f"{rand_z}.jpg")
+        self._save_img(item[1], dir="search", name=f"{rand_x}.jpg")
+        # ipdb.set_trace()
+
         return item
     
     def __len__(self):
@@ -105,3 +115,13 @@ class Pair(Dataset):
         val_indices = np.where(mask)[0]
 
         return val_indices
+
+    def _save_img(self, img, dir, name):
+        img = img.permute(1, 2, 0).cpu().numpy()
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        filedir = os.path.join("./image_check", "Crossing", dir)
+        create_dir(filedir)
+        filename = os.path.join(filedir, name)
+        save_img(img, filename)
+
+        pass

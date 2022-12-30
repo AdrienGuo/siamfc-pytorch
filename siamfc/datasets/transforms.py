@@ -1,18 +1,18 @@
 from __future__ import absolute_import, division
 
 import numbers
-
 import os
+
 import cv2
 import ipdb
 import numpy as np
 import torch
 
-from utils.file_organizer import save_img, create_dir
+from utils.file_organizer import create_dir, save_img
 
-from . import ops
+from .. import ops
 
-__all__ = ['SiamFCTransforms']
+__all__ = ['SiamFCTransforms', 'PCBTransforms']
 
 
 class Compose(object):
@@ -113,7 +113,7 @@ class SiamFCTransforms(object):
             RandomCrop(instance_sz - 2 * 8),
             ToTensor()])
     
-    def __call__(self, z, x, box_z, box_x, index):
+    def __call__(self, z, x, box_z, box_x):
         z = self._crop(z, box_z, self.instance_sz)
         x = self._crop(x, box_x, self.instance_sz)
         z = self.transforms_z(z)
@@ -143,4 +143,57 @@ class SiamFCTransforms(object):
             img, center, size, out_size,
             border_value=avg_color, interp=interp)
         
+        return patch
+
+
+class PCBTransforms(object):
+    """對我的 pcb 做和上面的 SiamFCTransforms 一樣的事情"""
+
+    def __init__(self, exemplar_sz=127, instance_sz=255, context=0.5):
+        self.exemplar_sz = exemplar_sz
+        self.instance_sz = instance_sz
+        self.context = context
+
+        self.transforms_z = Compose([
+            RandomStretch(),
+            CenterCrop(instance_sz - 8),
+            RandomCrop(instance_sz - 2 * 8),
+            CenterCrop(exemplar_sz),
+        ])
+        self.transforms_x = Compose([
+            RandomStretch(),
+            CenterCrop(instance_sz - 8),
+            RandomCrop(instance_sz - 2 * 8),
+        ])
+
+    def __call__(self, z, x, box_z, box_x):
+        z = self._crop(z, box_z, self.instance_sz)
+        x = self._crop(x, box_x, self.instance_sz)
+        z = self.transforms_z(z)
+        x = self.transforms_x(x)
+        return z, x
+
+    def _crop(self, img, box, out_size):
+        # convert [x1, y1, w, h] -> [cy, cx, h, w]
+        box = np.array([
+            box[1] - 1 + (box[3] - 1) / 2,
+            box[0] - 1 + (box[2] - 1) / 2,
+            box[3], box[2]], dtype=np.float32)
+        center, target_sz = box[:2], box[2:]
+
+        context = self.context * np.sum(target_sz)
+        size = np.sqrt(np.prod(target_sz + context))
+        size *= out_size / self.exemplar_sz
+
+        avg_color = np.mean(img, axis=(0, 1), dtype=float)
+        interp = np.random.choice([
+            cv2.INTER_LINEAR,
+            cv2.INTER_CUBIC,
+            cv2.INTER_AREA,
+            cv2.INTER_NEAREST,
+            cv2.INTER_LANCZOS4])
+        patch = ops.crop_and_resize(
+            img, center, size, out_size,
+            border_value=avg_color, interp=interp)
+
         return patch

@@ -1,7 +1,8 @@
 class AverageMeter:
     """Computes and stores the average and current value"""
-    def __init__(self, name) -> None:
+    def __init__(self, name, num) -> None:
         self.name = name
+        self.num = num
         self.reset()
 
     def reset(self):
@@ -16,7 +17,7 @@ class AverageMeter:
         self.count += n
         self.avg = self.sum / self.count
 
-    def display(self, type: str):
+    def display(self, type: str, iter):
         attr = None
         if type == "val":
             attr = self.val
@@ -25,6 +26,6 @@ class AverageMeter:
         elif type == "sum":
             attr = self.sum
         else:
-            assert False, "ERROR, invalid display type"
-        fmtstr = f"{self.name}: {attr:<7.5f}"
+            assert False, "Invalid display type"
+        fmtstr = f"[{iter}/{self.num}] | {self.name}: {attr:<7.5f}"
         print(fmtstr)

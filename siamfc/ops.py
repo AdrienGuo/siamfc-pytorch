@@ -90,7 +90,7 @@ def show_image(img, boxes=None, box_fmt='ltwh', colors=None,
         # winname = 'window_{}'.format(fig_n)
         # cv2.imshow(winname, img)
         # cv2.waitKey(delay)
-        filedir = os.path.join("./results", "Basketball", "predict")
+        filedir = os.path.join("./results", "Crossing", "predict")
         create_dir(filedir)
         filename = os.path.join(filedir, f"{frame}.jpg")
         save_img(img, filename)

@@ -17,15 +17,15 @@ from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.data import DataLoader
 
 from utils import create_dir, save_img
-from utils.wandb import WandB
 from utils.average_meter import AverageMeter
+from utils.wandb import WandB
 
-from . import ops
-from .backbones import AlexNetV1
-from .datasets import Pair
-from .heads import SiamFC
-from .losses import BalancedLoss
-from .transforms import SiamFCTransforms
+from .. import ops
+from ..datasets.datasets import Pair
+from ..losses import BalancedLoss
+from ..models.backbone.backbones import AlexNetV1
+from ..models.head.heads import SiamFC
+from ..datasets.transforms import SiamFCTransforms
 
 __all__ = ['TrackerSiamFC']
 
@@ -43,6 +43,19 @@ class Net(nn.Module):
         return self.head(z, x)
 
 
+class SeperateNet(nn.Module):
+    def __init__(self, backbone_z, backbone_x, head):
+        super(SeperateNet, self).__init__()
+        self.backbone_z = backbone_z
+        self.backbone_x = backbone_x
+        self.head = head
+    
+    def forward(self, z, x):
+        z = self.backbone_z(z)
+        x = self.backbone_x(x)
+        return self.head(z, x)
+
+
 class TrackerSiamFC(Tracker):
 
     def __init__(self, net_path=None, **kwargs):
@@ -54,8 +67,12 @@ class TrackerSiamFC(Tracker):
         self.device = torch.device('cuda:0' if self.cuda else 'cpu')
 
         # setup model
-        self.net = Net(
-            backbone=AlexNetV1(),
+        # self.net = Net(
+        #     backbone=AlexNetV1(),
+        #     head=SiamFC(self.cfg.out_scale))
+        self.net = SeperateNet(
+            backbone_z=AlexNetV1(),
+            backbone_x=AlexNetV1(),
             head=SiamFC(self.cfg.out_scale))
         ops.init_weights(self.net)
         
@@ -90,7 +107,7 @@ class TrackerSiamFC(Tracker):
             'instance_sz': 255,
             'context': 0.5,
             # inference parameters
-            'scale_num': 1,
+            'scale_num': 3,
             'scale_step': 1.0375,
             'scale_lr': 0.59,
             'scale_penalty': 0.9745,
@@ -99,15 +116,16 @@ class TrackerSiamFC(Tracker):
             'response_up': 16,
             'total_stride': 8,
             # train parameters
-            'epoch_num': 1000,
+            'epoch_num': 200,
             'batch_size': 8,
-            'num_workers': 8,
+            'num_workers': 0,
             'initial_lr': 1e-2,
             'ultimate_lr': 1e-5,
             'weight_decay': 5e-4,
             'momentum': 0.9,
             'r_pos': 16,
-            'r_neg': 0}
+            'r_neg': 0
+        }
 
         for key, val in kwargs.items():
             if key in cfg:
@@ -148,7 +166,6 @@ class TrackerSiamFC(Tracker):
         self.z_sz = np.sqrt(np.prod(self.target_sz + context))
         self.x_sz = self.z_sz * \
             self.cfg.instance_sz / self.cfg.exemplar_sz
-        ipdb.set_trace()
         
         # exemplar image
         self.avg_color = np.mean(img, axis=(0, 1))
@@ -161,7 +178,7 @@ class TrackerSiamFC(Tracker):
         z = torch.from_numpy(z).to(
             self.device).permute(2, 0, 1).unsqueeze(0).float()
         # self.kernel: (1, 256, 6, 6)
-        self.kernel = self.net.backbone(z)
+        self.kernel = self.net.backbone_z(z)
         self._save_crop(z, dir="template", name="z.jpg")
     
     @torch.no_grad()
@@ -182,7 +199,7 @@ class TrackerSiamFC(Tracker):
         
         # responses
         # x: (scale_num, 256, 22, 22)
-        x = self.net.backbone(x)
+        x = self.net.backbone_x(x)
         # responses: (scale_num, 1, 17, 17)
         responses = self.net.head(self.kernel, x)
         responses = responses.squeeze(1).cpu().numpy()
@@ -203,7 +220,8 @@ class TrackerSiamFC(Tracker):
         # peak location
         response = responses[scale_id]
         response -= response.min()
-        response /= response.sum() + 1e-16
+        # response /= response.sum() + 1e-16
+        response /= response.max()
         # response: (272, 272)
         response = (1 - self.cfg.window_influence) * response + \
             self.cfg.window_influence * self.hann_window
@@ -283,13 +301,6 @@ class TrackerSiamFC(Tracker):
         
         return loss.item()
 
-    # def validation(self, loader):
-    #     self.net.eval()
-    #     for iter, batch in loader:
-    #         z = batch[0].to(self.device, non_blocking=self.cuda)
-    #         x = batch[1].to(self.device, non_blocking=self.cuda)
-    #         with torch.no_grad():
-
     @torch.enable_grad()
     def train_over(self, seqs, val_seqs=None,
                    save_dir='pretrained'):
@@ -320,7 +331,7 @@ class TrackerSiamFC(Tracker):
             shuffle=True,
             num_workers=self.cfg.num_workers,
             pin_memory=self.cuda,
-            drop_last=True
+            drop_last=False
         )
         val_loader = DataLoader(
             val_dataset,
@@ -328,10 +339,11 @@ class TrackerSiamFC(Tracker):
             shuffle=True,
             num_workers=self.cfg.num_workers,
             pin_memory=self.cuda,
-            drop_last=True
+            drop_last=False
         )
-        
-        wandb = WandB(name="experiment", config=self.cfg._asdict())
+
+        wandb = WandB(
+            name="experiment", config=self.cfg._asdict(), init=False)
         # loop over epochs
         for epoch in range(self.cfg.epoch_num):
             train_loss = AverageMeter(name="Loss")
@@ -350,13 +362,13 @@ class TrackerSiamFC(Tracker):
             
             # Validation
             val_loss = AverageMeter(name="Loss")
-            for it, batch in enumerate(val_loader):
-                loss = self.train_step(batch, backward=False)
-                val_loss.update(val=loss)
-            print("Testing Summary:")
-            val_loss.display(type="avg")
+            # for it, batch in enumerate(val_loader):
+            #     loss = self.train_step(batch, backward=False)
+            #     val_loss.update(val=loss)
+            # print("Testing Summary:")
+            # val_loss.display(type="avg")
 
-            wandb.upload(train_loss.avg, val_loss.avg, epoch=epoch+1)
+            # wandb.upload(train_loss.avg, val_loss.avg, epoch=epoch+1)
             # save checkpoint
             if not os.path.exists(save_dir):
                 os.makedirs(save_dir)
@@ -401,7 +413,7 @@ class TrackerSiamFC(Tracker):
     def _save_crop(self, img, dir, name):
         img = img.permute(0, 2, 3, 1).cpu().numpy().squeeze()
         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        filedir = os.path.join("./results", "Basketball", dir)
+        filedir = os.path.join("./results", "Crossing", dir)
         create_dir(filedir)
         filename = os.path.join(filedir, name)
         save_img(img, filename)

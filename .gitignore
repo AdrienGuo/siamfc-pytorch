@@ -3,6 +3,10 @@ data/
 image_check/
 results/
 wandb/
+models/
+
+*.pth
+pyrightconfig.json
 
 
 .*

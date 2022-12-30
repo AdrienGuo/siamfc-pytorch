@@ -1,16 +1,31 @@
-from __future__ import absolute_import
-
+import argparse
 import os
+
+import ipdb
 from got10k.datasets import *
 
 from siamfc import TrackerSiamFC
-import ipdb
+from tools.engines.trainer import Trainer
 
 if __name__ == '__main__':
-    root_dir = os.path.expanduser('./data/GOT-10k')
+    # parse arguments
+    parser = argparse.ArgumentParser(description='SiamFC training arguments')
+    parser.add_argument('--data', type=str, default='', help='path to train data')
+    parser.add_argument('--test_data', type=str, default='', help='path to test data')
+    parser.add_argument('--criteria', type=str, default='', help='all / big / mid / small')
+    parser.add_argument('--target', type=str, default='', help='one / multi')
+    parser.add_argument('--method', type=str, default='', help='official / origin')
+    parser.add_argument('--bg', type=str, default='', help='background')
+    args = parser.parse_args()
 
-    seqs = GOT10k(root_dir, subset='train', return_meta=True)
-    val_seqs = GOT10k(root_dir, subset='val', return_meta=True)
+    trainer = Trainer(args)
+    trainer.build_dataloaders()
+    trainer.train()
 
-    tracker = TrackerSiamFC()
-    tracker.train_over(seqs, val_seqs=val_seqs)
+    # # 官方做法
+    # root_dir = os.path.expanduser('./data/GOT-10k')
+    # seqs = GOT10k(root_dir, subset='train', return_meta=True)
+    # val_seqs = GOT10k(root_dir, subset='val', return_meta=True)
+
+    # tracker = TrackerSiamFC()
+    # tracker.train_over(seqs, val_seqs=val_seqs)
