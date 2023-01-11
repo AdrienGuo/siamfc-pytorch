@@ -48,10 +48,16 @@ def x1y1x2y2tox1y1wh(boxes):
 
     boxes_transformed = np.zeros(boxes.shape)
     if isinstance(boxes, np.ndarray):
-        boxes_transformed[:, 0] = boxes[:, 0]
-        boxes_transformed[:, 1] = boxes[:, 1]
-        boxes_transformed[:, 2] = boxes[:, 2] - boxes[:, 0]  # w = x2 - x1
-        boxes_transformed[:, 3] = boxes[:, 3] - boxes[:, 1]  # h = y2 - y1
+        if boxes.ndim == 1:
+            boxes_transformed[0] = boxes[0]
+            boxes_transformed[1] = boxes[1]
+            boxes_transformed[2] = boxes[2] - boxes[0]  # w = x2 - x1
+            boxes_transformed[3] = boxes[3] - boxes[1]  # h = y2 - y1
+        elif boxes.ndim == 2:
+            boxes_transformed[:, 0] = boxes[:, 0]
+            boxes_transformed[:, 1] = boxes[:, 1]
+            boxes_transformed[:, 2] = boxes[:, 2] - boxes[:, 0]  # w = x2 - x1
+            boxes_transformed[:, 3] = boxes[:, 3] - boxes[:, 1]  # h = y2 - y1
         return boxes_transformed
     else:
         assert False, "type error"

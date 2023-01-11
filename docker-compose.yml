@@ -1,0 +1,16 @@
+version: '3'
+
+services:
+  siamfc:
+    build: .
+    container_name: SiamFC
+    volumes:
+      - ./:/workspace/SiamFC
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+              count: all
+    stdin_open: true
+    tty: true

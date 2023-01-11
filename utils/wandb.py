@@ -3,6 +3,7 @@ import wandb
 
 class WandB():
     def __init__(self, name: str, config: dict, init: bool) -> None:
+        self.info = None
         if init:
             wandb.init(
                 name=name,
@@ -10,13 +11,12 @@ class WandB():
                 config=config
             )
 
-    def upload(self, train_info: float, val_info: float, epoch, commit=True) -> None:
-        wandb.log({
-            'Train': {
-                'Loss': train_info,
-            },
-            'Test': {
-                'Loss': val_info,
-            },
-            'Epoch': epoch,
-        }, commit=commit)
+    def update(self, info, epoch):
+        self.info = info
+        self.info['Epoch'] = epoch
+
+    def upload(self, commit=True) -> None:
+        wandb.log(
+            self.info,
+            commit=commit
+        )

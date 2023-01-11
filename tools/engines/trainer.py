@@ -4,13 +4,14 @@ import ipdb
 import numpy as np
 import torch
 import torch.optim as optim
-import yaml
 from torch.optim.lr_scheduler import ExponentialLR
 from torch.utils.data import DataLoader
 
-from config.config import Config
+from config.config import cfg
+from siamfc import SiamFCTemplateMatch
+from siamfc.datasets.augmentation.augmentation import PCBAugmentation
 from siamfc.datasets.pcbdataset.pcbdataset import PCBDataset
-from siamfc.datasets.transforms import PCBTransforms
+from siamfc.datasets.utils.transforms import PCBTransforms
 from siamfc.labels import create_labels
 from siamfc.losses import BalancedLoss
 from siamfc.models.backbone.backbones import AlexNetV1
@@ -20,6 +21,8 @@ from utils.average_meter import AverageMeter
 from utils.file_organizer import create_dir
 from utils.wandb import WandB
 
+from .evaluator import Evaluator
+
 
 class Trainer(object):
     def __init__(self, args) -> None:
@@ -28,9 +31,10 @@ class Trainer(object):
         self.device = torch.device('cuda:0' if self.cuda else 'cpu')
 
         self.args = args
-        # Load config.yaml
-        self.cfg = Config(yaml_path="./config/config.yaml")
-        self.cfg.update_with_dict(vars(self.args))
+        # Load config.yaml & Combine with args
+        cfg.merge_from_file("./config/config.yaml")
+        cfg.update(vars(args))
+        self.cfg = cfg
 
         # Setup model
         self.model = SiameseNet(
@@ -55,52 +59,114 @@ class Trainer(object):
             1.0 / self.cfg.epochs)
         self.lr_scheduler = ExponentialLR(self.optimizer, gamma)
 
+        # Setup evaluator
+        self.evaluator = Evaluator()
+
     def build_dataloaders(self):
-        def create_dataloader(dataset):
+        def create_dataloader(dataset, batch_size, shuffle, num_workers):
             dataloader = DataLoader(
                 dataset=dataset,
-                batch_size=self.cfg.batch_size,
-                shuffle=False,
-                num_workers=self.cfg.num_workers,
+                batch_size=batch_size,
+                shuffle=shuffle,
+                num_workers=num_workers,
                 pin_memory=True
             )
             return dataloader
 
-        # setup dataset
+        # setup transforms
         transforms = PCBTransforms(
             exemplar_sz=self.cfg.exemplar_sz,
             instance_sz=self.cfg.instance_sz,
             context=self.cfg.context)
 
-        dataset = PCBDataset(
-            self.args, self.args.data, mode="train", transforms=transforms)
-        test_dataset = PCBDataset(
-            self.args, self.args.test_data, mode="test", transforms=transforms)
+        # datasets arguments
+        train_args = {
+            'data_path': self.cfg.data,
+            'method': self.cfg.method,
+            'criteria': self.cfg.criteria,
+            'bg': self.cfg.bg,
+            'target': self.cfg.target,
+        }
+
+        data_augmentations = {
+            'train': {
+                'template': PCBAugmentation(self.cfg.train.template),
+                'search': PCBAugmentation(self.cfg.train.search),
+            },
+            'test': {
+                
+            }
+        }
+        dataset = PCBDataset(train_args, mode="train", augmentations=data_augmentations['train'], transforms=transforms)
+        test_dataset = dataset
+        eval_dataset = dataset
+        test_eval_dataset = dataset
+
+        # test_dataset = PCBDataset(
+        #     self.cfg, self.cfg.test_data,
+        #     method=self.cfg.method,
+        #     criteria=self.cfg.criteria,
+        #     bg=self.cfg.bg,
+        #     mode="test",
+        #     transforms=transforms)
+        # eval_dataset = PCBDataset(
+        #     self.cfg, self.cfg.data,
+        #     method=self.cfg.eval_method,
+        #     criteria=self.cfg.eval_criteria,
+        #     bg=self.cfg.eval_bg,
+        #     mode="test")
+        # test_eval_dataset = PCBDataset(
+        #     self.cfg, self.cfg.test_data,
+        #     method=self.cfg.eval_method,
+        #     criteria=self.cfg.eval_criteria,
+        #     bg=self.cfg.eval_bg,
+        #     mode="test")
         assert len(dataset) != 0, "Data is empty"
         print(f"Train data size: {len(dataset)}")
         print(f"Test data size: {len(test_dataset)}")
+        print(f"Train Eval data size: {len(eval_dataset)}")
+        print(f"Test Eval data size: {len(test_eval_dataset)}")
+        self.cfg.update({'Train Data Size': len(dataset)})
+        self.cfg.update({'Test Data Size': len(test_dataset)})
+        self.cfg.update({'Train Eval Data Size': len(eval_dataset)})
+        self.cfg.update({'Test Eval Data Size': len(test_eval_dataset)})
 
-        self.train_loader = create_dataloader(dataset)
-        self.test_loader = create_dataloader(test_dataset)
+        # dataloaders
+        self.train_loader = create_dataloader(dataset, batch_size=self.cfg.batch_size, shuffle=True, num_workers=self.cfg.num_workers)
+        self.test_loader = create_dataloader(test_dataset, batch_size=self.cfg.batch_size, shuffle=True, num_workers=self.cfg.num_workers)
+        self.eval_loader = create_dataloader(eval_dataset, batch_size=1, shuffle=False, num_workers=8)
+        self.eval_test_loader = create_dataloader(test_eval_dataset, batch_size=1, shuffle=False, num_workers=8)
 
     def train(self):
         self.model.train()
-        model_name = "tmp_mid"
+        model_name = "Flip_all_all"
 
         # Initialize WandB
         wandb = WandB(
-            name=model_name, config=self.cfg, init=True)
+            name=model_name, config=self.cfg, init=False)
 
         # Training
         for epoch in range(self.cfg.epochs):
             print(f"Epoch: [{epoch+1}/{self.cfg.epochs}]")
+            # Record epoch info
+            epoch_info = {'Train': {}, 'Test': {}}
 
             train_loss = self.train_one_epoch()
-            val_loss = self.validation()
-            # Upload loss to WandB
-            wandb.upload(
-                train_loss.avg, val_loss.avg, epoch=epoch+1
-            )
+            test_loss = self.validation()
+            epoch_info['Train'].update(train_loss)
+            epoch_info['Test'].update(test_loss)
+
+            # Evaluate
+            if (epoch == 0) or (epoch + 1 == self.cfg.epochs) \
+                    or ((epoch + 1) % self.cfg.eval_freq == 0):
+                train_metrics = self._evaluate(self.model, self.eval_loader)
+                test_metrics = self._evaluate(self.model, self.eval_test_loader)
+                epoch_info['Train'].update(train_metrics)
+                epoch_info['Test'].update(test_metrics)
+
+            # Upload epoch_info to WandB
+            wandb.update(info=epoch_info, epoch=epoch+1)
+            wandb.upload(commit=True)
 
             # Update lr at each epoch
             self.lr_scheduler.step()
@@ -134,12 +200,14 @@ class Trainer(object):
 
         print("Train Summary:")
         train_loss.display(type="avg", iter="finish")
-        return train_loss
+        return {
+            'Loss': train_loss.avg
+        }
 
     def validation(self):
         self.model.eval()
 
-        val_loss = AverageMeter(name="Loss", num=len(self.test_loader))
+        test_loss = AverageMeter(name="Loss", num=len(self.test_loader))
         with torch.no_grad():
             for iter, data in enumerate(self.test_loader):
                 z_img = data['z_img'].to(self.device)
@@ -154,11 +222,19 @@ class Trainer(object):
 
                 # calculate loss
                 loss = self.criterion(responses, labels)
-                val_loss.update(val=loss.item(), n=self.cfg.batch_size)
+                test_loss.update(val=loss.item(), n=self.cfg.batch_size)
 
         print("Validation Summary:")
-        val_loss.display(type="avg", iter="finish")
-        return val_loss
+        test_loss.display(type="avg", iter="finish")
+        return {
+            'Loss': test_loss.avg
+        }
+
+    def _evaluate(self, model, dataloader):
+        # Load matcher model
+        matcher = SiamFCTemplateMatch(model=model)
+        metrics = self.evaluator.evaluate(matcher, dataloader)
+        return metrics
 
     def _save_checkpoint(self, epoch, dir_name):
         save_dir = os.path.join("./models", dir_name)

@@ -53,7 +53,24 @@ def crop_like_SiamFC(image, bbox, context_amount=0.5, exemplar_size=127, instanc
     return z, scale
 
 
-def crop_like_teacher(img, box, bg, exemplar_size=127, padding=(0, 0, 0)):
+def crop(img, box):
+    """
+    Args:
+        box: ([x1, y1, x2, y2])
+    """
+
+    img_size = img.shape[:2]
+    box = np.array([
+        int(max(0, box[0])),
+        int(max(0, box[1])),
+        int(min(img_size[1], box[2])),
+        int(min(img_size[0], box[3]))
+    ])
+    crop_img = img[box[1]: box[3], box[0]: box[2]]
+    return crop_img
+
+
+def crop_with_bg(img, box, bg, exemplar_size=127, padding=(0, 0, 0)):
     img_h, img_w = img.shape[:2]
     box_pos = [(box[2] + box[0]) / 2., (box[3] + box[1]) / 2.]
     box_size = [(box[2] - box[0]), (box[3] - box[1])]
@@ -79,10 +96,12 @@ def crop_like_teacher(img, box, bg, exemplar_size=127, padding=(0, 0, 0)):
 
         # 不要讓裁切範圍超出原圖
         # TODO: int -> np.around
-        box[0] = int(max(0, box[0]))
-        box[1] = int(max(0, box[1]))
-        box[2] = int(min(img_w, box[2]))
-        box[3] = int(min(img_h, box[3]))
+        box = np.array([
+            int(max(0, box[0])),
+            int(max(0, box[1])),
+            int(min(img_w, box[2])),
+            int(min(img_h, box[3]))
+        ])
         box_size = [(box[2] - box[0]), (box[3] - box[1])]
 
         x = (exemplar_size / 2) - (box_size[0] / 2)

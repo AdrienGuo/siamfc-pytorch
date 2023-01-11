@@ -1,32 +1,47 @@
-import yaml
+from yacs.config import CfgNode as CN
 
+__C = CN()
+cfg = __C
 
-class Config():
-    """Class that loads hyperparameters from a json file.
-    Example:
-    ```
-    params = Params(json_path)
-    print(params.learning_rate)
-    params.learning_rate = 0.5  # change the value of learning_rate in params
-    ```
-    """
+# basic parameters
+__C.out_scale = 0.001
+__C.exemplar_sz = 127
+__C.instance_sz = 255
+__C.context = 0.5
 
-    def __init__(self, yaml_path):
-        # Load config.yaml
-        with open(yaml_path, 'r') as f:
-            cfg = yaml.safe_load(f)
-            self.__dict__.update(cfg)
+# inference parameters
+__C.scale_num = 3
+__C.scale_step = 1.0375
+__C.scale_lr = 0.59
+__C.scale_penalty = 0.9745
+__C.window_influence = 0.176
+__C.response_sz = 17
+__C.response_up = 16
+__C.total_stride = 8
 
-    def save(self, json_path):
-        with open(json_path, 'w') as f:
-            yaml.safe_dump(self.__dict__, f, sort_keys=False)
+# train parameters
+__C.epochs = 200
+__C.batch_size = 8
+__C.eval_freq = 3
+__C.num_workers = 10
+__C.initial_lr = 1.0e-2
+__C.ultimate_lr = 1.0e-5
+__C.weight_decay = 5.0e-4
+__C.momentum = 0.9
+__C.r_pos = 16
+__C.r_neg = 0
 
-    def update(self, json_path):
-        """Loads parameters from json file."""
-        with open(json_path) as f:
-            cfg = yaml.safe_load(f)
-            self.__dict__.update(cfg)
+# Augmentations
+# train.template
+__C.train = CN()
+__C.train.template = CN()
+__C.train.template.clahe = True
+__C.train.template.flip = 0.3
+# train.search
+__C.train.search = CN()
+__C.train.search.clahe = True
+__C.train.search.flip = 0.0
 
-    def update_with_dict(self, dictio):
-        """Updates the parameters with the keys and values of a dictionary."""
-        self.__dict__.update(dictio)
+__C.test = CN()
+__C.test.template = CN()
+__C.test.template.clahe = __C.train.template.clahe

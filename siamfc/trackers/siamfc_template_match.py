@@ -11,7 +11,9 @@ from ..models.model_builder import SiameseNet, SeperateNet
 
 
 class SiamFCTemplateMatch():
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, model, **kwargs) -> None:
+        self.net = model
+        self.net.eval()
         self.cfg = self.parse_args(**kwargs)
 
         # Setup GPU device if available
@@ -51,21 +53,7 @@ class SiamFCTemplateMatch():
                 cfg.update({key: val})
         return namedtuple('Config', cfg.keys())(**cfg)
 
-    def load_model(self, model_path):
-        # Setup model
-        self.net = SiameseNet(
-            backbone=AlexNetV1(),
-            head=SiamFC(self.cfg.out_scale))
-        # self.net = SeperateNet(
-        #     backbone_z=AlexNetV1(),
-        #     backbone_x=AlexNetV1(),
-        #     head=SiamFC(self.cfg.out_scale))
-
-        # Load checkpoint
-        self.net.load_state_dict(torch.load(
-            model_path, map_location=lambda storage, loc: storage))
-        self.net = self.net.to(self.device)
-
+    @torch.no_grad()
     def init(self, z_img, z_box):
         """
         用 template 做初始化 (z_img)，
@@ -156,31 +144,96 @@ class SiamFCTemplateMatch():
         # response: (272, 272)
         response = responses[scale_id]
         response -= response.min()
-        # response /= response.sum() + 1e-16
         response /= response.max()
-        # response = (1 - self.cfg.window_influence) * response + \
-        #     self.cfg.window_influence * self.hann_window
-        # 注意： loc: [row, col] 是先 y 軸，再 x 軸
-        loc = np.unravel_index(response.argmax(), response.shape)
         response_size = response.shape[:2]
 
-        # locate target center
-        # 改成以 response 的中心點當作原點
-        disp_x_in_response = loc[1] - ((response_size[1] - 1) / 2)
-        disp_y_in_response = loc[0] - ((response_size[0] - 1) / 2)
-        # disp_in_instance: 改換到 self.scale_sz 上的比例後 (除以 response_up)，
-        #                   再乘上 total_stride 變成實際的位移
-        disp_x_in_instance = disp_x_in_response * self.cfg.total_stride
-        disp_y_in_instance = disp_y_in_response * self.cfg.total_stride
-        self.center += (disp_y_in_instance, disp_x_in_instance)
+        boxes = list()
+        threshold = 0.9
+        locs = np.argwhere(response >= threshold)
+        # Sort locs in descending order
+        scores = response[locs[:, 0], locs[:, 1]]
+        sort_idx = np.argsort(-scores)
+        locs = locs[sort_idx]
+        for loc in locs:
+            # locate target center
+            # 改成以 response 的中心點當作原點
+            disp_x_in_response = loc[1] - ((response_size[1] - 1) / 2)
+            disp_y_in_response = loc[0] - ((response_size[0] - 1) / 2)
+            # disp_in_instance: 改換到 self.scale_sz 上的比例後 (除以 response_up)，
+            #                   再乘上 total_stride 變成實際的位移
+            disp_x_in_instance = disp_x_in_response * self.cfg.total_stride
+            disp_y_in_instance = disp_y_in_response * self.cfg.total_stride
+            center = self.center + (disp_y_in_instance, disp_x_in_instance)
+            box = np.array([
+                (center[1] + 1) - (self.target_sz[0] - 1) / 2,
+                (center[0] + 1) - (self.target_sz[1] - 1) / 2,
+                (center[1] + 1) + (self.target_sz[0] - 1) / 2,
+                (center[0] + 1) + (self.target_sz[1] - 1) / 2
+            ])
+            boxes.append(box)
+        # NMS
+        boxes = np.array(boxes)
+        overlapThresh = 0.1
+        boxes = self.nms(boxes, overlapThresh)
 
-        # 這裡要超級超級超級小心上面 (x,y) 的順序
-        # box: [x1, y1, w, h]
-        box = np.array([
-            self.center[1] + 1 - (self.target_sz[0] - 1) / 2,
-            self.center[0] + 1 - (self.target_sz[1] - 1) / 2,
-            self.target_sz[0], self.target_sz[1]])
+        # # 注意： loc: [row, col] 是先 y 軸，再 x 軸
+        # loc = np.unravel_index(response.argmax(), response.shape)
+
+        # # locate target center
+        # # 改成以 response 的中心點當作原點
+        # disp_x_in_response = loc[1] - ((response_size[1] - 1) / 2)
+        # disp_y_in_response = loc[0] - ((response_size[0] - 1) / 2)
+        # # disp_in_instance: 改換到 self.scale_sz 上的比例後 (除以 response_up)，
+        # #                   再乘上 total_stride 變成實際的位移
+        # disp_x_in_instance = disp_x_in_response * self.cfg.total_stride
+        # disp_y_in_instance = disp_y_in_response * self.cfg.total_stride
+        # self.center += (disp_y_in_instance, disp_x_in_instance)
+
+        # # 這裡要超級超級超級小心上面 (x,y) 的順序
+        # # box: [x1, y1, x2, y2]
+        # box = np.array([
+        #     (self.center[1] + 1) - (self.target_sz[0] - 1) / 2,
+        #     (self.center[0] + 1) - (self.target_sz[1] - 1) / 2,
+        #     (self.center[1] + 1) + (self.target_sz[0] - 1) / 2,
+        #     (self.center[0] + 1) + (self.target_sz[1] - 1) / 2])
+        # boxes = np.expand_dims(box, axis=0)
 
         # ipdb.set_trace()
 
-        return box
+        return boxes
+
+    def nms(self, boxes, overlapThresh=0.1):
+        # Return an empty list, if no boxes given
+        if len(boxes) == 0:
+            return []
+        x1 = boxes[:, 0]  # x coordinate of the top-left corner
+        y1 = boxes[:, 1]  # y coordinate of the top-left corner
+        x2 = boxes[:, 2]  # x coordinate of the bottom-right corner
+        y2 = boxes[:, 3]  # y coordinate of the bottom-right corner
+        # Compute the area of the bounding boxes and sort the bounding
+        # Boxes by the bottom-right y-coordinate of the bounding box
+        areas = (x2 - x1 + 1) * (y2 - y1 + 1) # We add 1, because the pixel at the start as well as at the end counts
+
+        pick = list()
+        # The indices of all boxes at start. We will redundant indices one by one.
+        indices = np.arange(len(x1))
+        while len(indices) > 0:
+            idx = indices[0]
+            pick.append(idx)
+
+            # Find out the coordinates of the intersection box
+            xx1 = np.maximum(boxes[idx, 0], boxes[indices[1: ], 0])
+            yy1 = np.maximum(boxes[idx, 1], boxes[indices[1: ], 1])
+            xx2 = np.minimum(boxes[idx, 2], boxes[indices[1: ], 2])
+            yy2 = np.minimum(boxes[idx, 3], boxes[indices[1: ], 3])
+            # Find out the width and the height of the intersection box
+            w = np.maximum(0, xx2 - xx1 + 1)
+            h = np.maximum(0, yy2 - yy1 + 1)
+            # Compute ious
+            overlaps = (w * h)
+            ious = overlaps / (areas[idx] + areas[indices[1: ]] - overlaps)
+            # Find 小於 threshold 的 ious
+            idx = np.where(ious <= overlapThresh)[0]
+            indices = indices[idx + 1]  # 留下那些框
+
+        return boxes[pick]

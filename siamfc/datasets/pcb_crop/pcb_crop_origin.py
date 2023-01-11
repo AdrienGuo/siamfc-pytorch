@@ -21,7 +21,7 @@ class PCBCropOrigin:
         self.z_min = z_img_size_min
         self.bg = background
 
-    def _template_crop(self, img, box, bg, padding=(0, 0, 0)):
+    def _template_crop(self, img, box, bg):
         crop_img = crop_origin(img, box, bg)
 
         crop_img_h, crop_img_w = crop_img.shape[:2]
@@ -54,7 +54,6 @@ class PCBCropOrigin:
         img,
         z_box,
         gt_boxes,
-        padding
     ):
         # z_box: (1, [x1, y1, x2, y2])
         # gt_boxes: (num, [x1, y1, x2, y2])

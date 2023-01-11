@@ -1,94 +1,96 @@
+import cv2
 import ipdb
 import numpy as np
 
+from ... import ops
+from ...box_transforms import x1y1x2y2tox1y1wh
 from ..utils.process import resize, translate_and_crop
+from ..utils.transforms import CenterCrop, Compose, RandomCrop, RandomStretch
+from .crop import crop, crop_with_bg
 
 
-class PCBCropOfficial:
-    """
-    這是搭配 原paper (official) 的方法使用的。
-    """
+class PCBCropSiamFC:
+    """參考 SiamFC 論文的切法，另外可以用 bg 決定背景多寡。"""
 
-    def __init__(self, template_size, search_size, shift=0) -> None:
+    def __init__(self, template_size, search_size, background, context=0.5) -> None:
         self.z_size = template_size
         self.x_size = search_size
-        self.shift = shift  # spatial aware sampling
+        self.bg = background
+        self.context = context
 
-    def make_img511(self, img, box, out_size, exemplar_size=127, context_amount=0.5, padding=(0, 0, 0)):
-        """
-        因為論文的作法是先做出一張 (511, 511, 3) 的影像，
-        再去從這張影像上面切出 template, search。
-        作法：
-            先用 box 根據一套公式轉換，算出 crop_side，
-            這個 crop_side 要變成 exemplar_size，所以得到 scale，
-            最後就是對原圖做 scale 倍的縮放和裁切後回傳。
-        """
+        self.transforms_z = Compose([
+            RandomStretch(),
+            CenterCrop(search_size - 8),
+            RandomCrop(search_size - 2 * 8),
+            CenterCrop(template_size),
+        ])
+        self.transforms_x = Compose([
+            RandomStretch(),
+            CenterCrop(search_size - 8),
+            RandomCrop(search_size - 2 * 8),
+        ])
 
-        box = box.squeeze()
-        # 裁切的公式算法，原始作法要去看 [SiamFC](https://arxiv.org/pdf/1606.09549.pdf)
-        # 但其實 SiamCAR 這裡和原論文的作法不太一樣，不過最後結果應該是一樣的...吧？
-        # 公式: crop_side = ((w + p) × (h + p)) ^ 1/2
-        #                   p = (w + h) / 2
-        gt_size = [(box[2] - box[0]), (box[3] - box[1])]
-        wc_z = gt_size[1] + context_amount * sum(gt_size)
-        hc_z = gt_size[0] + context_amount * sum(gt_size)
+    def z_crop(self, img, box, out_size):
+        crop_img = crop(img, box)
+
+        box_size = [(box[2] - box[0]), (box[3] - box[1])]
+        wc_z = box_size[1] + self.context * sum(box_size)
+        hc_z = box_size[0] + self.context * sum(box_size)
         crop_side = np.sqrt(wc_z * hc_z)
-        # scale: 縮放比例
-        scale = exemplar_size / crop_side
-        img, box = resize(img, box, scale)
+        # scale: 縮放比例 (search image 也要做)
+        scale = self.z_size / crop_side
+        img, box = resize(crop_img, box, scale)
 
         # x, y 軸的位移距離
-        x = out_size / 2 - (box[0] + box[2]) / 2
-        y = out_size / 2 - (box[1] + box[3]) / 2
-        img, box, _ = translate_and_crop(
-            img, box, translate_px=(x, y), size=out_size, padding=padding)
-        return img, box
-
-    @staticmethod
-    def random():
-        return np.random.random() * 2 - 1.0
-
-    def get_template(self, img, box, padding=(0, 0, 0)):
-        # x, y 軸的位移距離
-        x = self.z_size / 2 - (box[0] + box[2]) / 2
-        y = self.z_size / 2 - (box[1] + box[3]) / 2
+        img_size = img.shape[:2]
+        x = out_size / 2 - (img_size[1]) / 2
+        y = out_size / 2 - (img_size[0]) / 2
+        avg_chans = np.mean(img, axis=(0, 1))
         img, _, _ = translate_and_crop(
-            img, box, translate_px=(x, y), size=self.z_size, padding=padding)
+            img, box, translate_px=(x, y), size=out_size, padding=avg_chans)
         return img
 
-    def get_search(self, img, box, padding=(0, 0, 0)):
-        # x, y 軸的位移距離
-        x = self.x_size / 2 - (box[0] + box[2]) / 2
-        y = self.x_size / 2 - (box[1] + box[3]) / 2
-        # spatial aware sampling
-        # 要去看 [SiamRPN++](https://arxiv.org/pdf/1812.11703.pdf)
-        x = x + PCBCropOfficial.random() * self.shift
-        y = y + PCBCropOfficial.random() * self.shift
-        img, box, _ = translate_and_crop(
-            img, box, translate_px=(x, y), size=self.x_size, padding=padding)
-        return img, box
+    def _crop(self, img, box, out_size):
+        # convert [x1, y1, w, h] -> [cy, cx, h, w]
+        box = np.array([
+            box[1] - 1 + (box[3] - 1) / 2,
+            box[0] - 1 + (box[2] - 1) / 2,
+            box[3], box[2]], dtype=np.float32)
+        center, target_sz = box[:2], box[2:]
+
+        context = self.context * np.sum(target_sz)
+        size = np.sqrt(np.prod(target_sz + context))
+        size *= out_size / self.z_size
+
+        avg_color = np.mean(img, axis=(0, 1), dtype=float)
+        interp = np.random.choice([
+            cv2.INTER_LINEAR,
+            cv2.INTER_CUBIC,
+            cv2.INTER_AREA,
+            cv2.INTER_NEAREST,
+            cv2.INTER_LANCZOS4])
+        patch = ops.crop_and_resize(
+            img, center, size, out_size,
+            border_value=avg_color, interp=interp)
+        return patch
 
     def get_data(
         self,
         img,
         z_box,
-        gt_boxes,
-        padding
     ):
-        # img511: (511, 511, 3)
-        img511, z_box511 = self.make_img511(
-            img, z_box, out_size=511, padding=padding)
+        # Crops
+        z_box = z_box.squeeze()
+        if self.bg == "All":
+            z_box = x1y1x2y2tox1y1wh(z_box)
+            z_img = self._crop(img, z_box, out_size=self.x_size)
+        else:
+            # 會使用 bg 參數來決定背景多寡
+            z_img = self.z_crop(img, z_box, out_size=self.x_size)
+            z_box = x1y1x2y2tox1y1wh(z_box)
+        x_img = self._crop(img, z_box, out_size=self.x_size)
 
-        # 這個 avg_chans 會導致兩種補的 padding 顏色不一樣
-        avg_chans = np.mean(img511, axis=(0, 1))
-        # z_img: (127, 127, 3)
-        z_img = self.get_template(
-            img511, z_box511, padding=avg_chans)
-        # search image 要使用 spatial aware sampling
-        # x_img: (255, 255, 3)
-        x_img, z_box = self.get_search(
-            img511, z_box511, padding=avg_chans)
-
-        z_box = z_box[np.newaxis, :]
-        gt_boxes = z_box  # 官方的作法只有單物件，所以兩個一樣
-        return z_img, x_img, z_box, gt_boxes
+        # Transforms
+        z_img = self.transforms_z(z_img)
+        x_img = self.transforms_x(x_img)
+        return z_img, x_img

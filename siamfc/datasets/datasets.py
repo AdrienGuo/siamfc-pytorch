@@ -62,8 +62,8 @@ class Pair(Dataset):
             # 我猜這樣做就和 SiamRPN++ 的 spatial aware sampling 類似概念
             item = self.transforms(*item)
 
-        self._save_img(item[0], dir="template", name=f"{rand_z}.jpg")
-        self._save_img(item[1], dir="search", name=f"{rand_x}.jpg")
+        # self._save_img(item[0], dir="template", name=f"{rand_z}.jpg")
+        # self._save_img(item[1], dir="search", name=f"{rand_x}.jpg")
         # ipdb.set_trace()
 
         return item
@@ -75,7 +75,7 @@ class Pair(Dataset):
         n = len(indices)
         assert n > 0
         # Test the chances of overfitting.
-        return indices[0], indices[0]
+        # return indices[0], indices[0]
 
         if n == 1:
             return indices[0], indices[0]

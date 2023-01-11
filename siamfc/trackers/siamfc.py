@@ -22,10 +22,10 @@ from utils.wandb import WandB
 
 from .. import ops
 from ..datasets.datasets import Pair
+from ..datasets.utils.transforms import SiamFCTransforms
 from ..losses import BalancedLoss
 from ..models.backbone.backbones import AlexNetV1
 from ..models.head.heads import SiamFC
-from ..datasets.transforms import SiamFCTransforms
 
 __all__ = ['TrackerSiamFC']
 
@@ -67,13 +67,13 @@ class TrackerSiamFC(Tracker):
         self.device = torch.device('cuda:0' if self.cuda else 'cpu')
 
         # setup model
-        # self.net = Net(
-        #     backbone=AlexNetV1(),
-        #     head=SiamFC(self.cfg.out_scale))
-        self.net = SeperateNet(
-            backbone_z=AlexNetV1(),
-            backbone_x=AlexNetV1(),
+        self.net = Net(
+            backbone=AlexNetV1(),
             head=SiamFC(self.cfg.out_scale))
+        # self.net = SeperateNet(
+        #     backbone_z=AlexNetV1(),
+        #     backbone_x=AlexNetV1(),
+        #     head=SiamFC(self.cfg.out_scale))
         ops.init_weights(self.net)
         
         # load checkpoint if provided
@@ -107,7 +107,7 @@ class TrackerSiamFC(Tracker):
             'instance_sz': 255,
             'context': 0.5,
             # inference parameters
-            'scale_num': 3,
+            'scale_num': 1,
             'scale_step': 1.0375,
             'scale_lr': 0.59,
             'scale_penalty': 0.9745,
@@ -118,7 +118,7 @@ class TrackerSiamFC(Tracker):
             # train parameters
             'epoch_num': 200,
             'batch_size': 8,
-            'num_workers': 0,
+            'num_workers': 10,
             'initial_lr': 1e-2,
             'ultimate_lr': 1e-5,
             'weight_decay': 5e-4,
@@ -178,7 +178,7 @@ class TrackerSiamFC(Tracker):
         z = torch.from_numpy(z).to(
             self.device).permute(2, 0, 1).unsqueeze(0).float()
         # self.kernel: (1, 256, 6, 6)
-        self.kernel = self.net.backbone_z(z)
+        self.kernel = self.net.backbone(z)
         self._save_crop(z, dir="template", name="z.jpg")
     
     @torch.no_grad()
@@ -199,7 +199,7 @@ class TrackerSiamFC(Tracker):
         
         # responses
         # x: (scale_num, 256, 22, 22)
-        x = self.net.backbone_x(x)
+        x = self.net.backbone(x)
         # responses: (scale_num, 1, 17, 17)
         responses = self.net.head(self.kernel, x)
         responses = responses.squeeze(1).cpu().numpy()
@@ -272,6 +272,8 @@ class TrackerSiamFC(Tracker):
             if visualize:
                 ops.show_image(img, boxes[f, :], frame=f)
 
+            ipdb.set_trace()
+
         return boxes, times
     
     def train_step(self, batch, backward=True):
@@ -324,14 +326,14 @@ class TrackerSiamFC(Tracker):
             transforms=transforms
         )
         
-        # setup dataloader
-        dataloader = DataLoader(
+        # setup train_loader
+        train_loader = DataLoader(
             dataset,
             batch_size=self.cfg.batch_size,
             shuffle=True,
             num_workers=self.cfg.num_workers,
             pin_memory=self.cuda,
-            drop_last=False
+            drop_last=True
         )
         val_loader = DataLoader(
             val_dataset,
@@ -339,36 +341,43 @@ class TrackerSiamFC(Tracker):
             shuffle=True,
             num_workers=self.cfg.num_workers,
             pin_memory=self.cuda,
-            drop_last=False
+            drop_last=True
         )
 
+        # Initialize WandB
         wandb = WandB(
-            name="experiment", config=self.cfg._asdict(), init=False)
+            name="siamfc", config=self.cfg._asdict(), init=False)
         # loop over epochs
         for epoch in range(self.cfg.epoch_num):
-            train_loss = AverageMeter(name="Loss")
+            epoch_info = {'Train': {}, 'Test': {}}
+            train_loss = AverageMeter(name="Loss", num=len(train_loader))
             # update lr at each epoch
             self.lr_scheduler.step(epoch=epoch)
 
-            # loop over dataloader
-            for it, batch in enumerate(dataloader):
+            # loop over train_loader
+            for it, batch in enumerate(train_loader):
                 loss = self.train_step(batch, backward=True)
                 print('Epoch: {} [{}/{}] Loss: {:.5f}'.format(
-                    epoch + 1, it + 1, len(dataloader), loss))
+                    epoch + 1, it + 1, len(train_loader), loss))
                 train_loss.update(val=loss)
                 sys.stdout.flush()
             print("Training Summary:")
-            train_loss.display(type="avg")
+            train_loss.display(type="avg", iter="finish")
             
             # Validation
-            val_loss = AverageMeter(name="Loss")
-            # for it, batch in enumerate(val_loader):
-            #     loss = self.train_step(batch, backward=False)
-            #     val_loss.update(val=loss)
-            # print("Testing Summary:")
-            # val_loss.display(type="avg")
+            val_loss = AverageMeter(name="Loss", num=len(val_loader))
+            for it, batch in enumerate(val_loader):
+                loss = self.train_step(batch, backward=False)
+                val_loss.update(val=loss)
+            print("Testing Summary:")
+            val_loss.display(type="avg", iter="finish")
 
-            # wandb.upload(train_loss.avg, val_loss.avg, epoch=epoch+1)
+            # Upload to WandB
+            epoch_info['Train']['Loss'] = train_loss.avg
+            epoch_info['Test']['Loss'] = val_loss.avg
+            wandb.update(info=epoch_info, epoch=epoch+1)
+            wandb.upload(commit=True)
+
             # save checkpoint
             if not os.path.exists(save_dir):
                 os.makedirs(save_dir)

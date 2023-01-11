@@ -4,30 +4,42 @@
 GREEN="\e[32m"
 ENDCOLOR="\e[0m"
 
-# Settings
-data="./data/TRI/train/tmp"
-test_data="./data/TRI/test/tmp"
-criteria="mid"  # all / mid
-target="one"  # one / multi
+# Train Settings
+data="all"  # all / tmp
+criteria="all"  # all / mid
 method="siamfc"  # siamcar / origin / official_origin / siamfc
-bg="1.0"  # background
+bg="All"  # background
+# Test Settings
+test_data="all"  # all / tmp
+# Evaluate Settings
+eval_criteria="all"  # all / mid
+eval_method="origin"  # siamcar / origin / official_origin / siamfc
+eval_bg="1.0"
+# Others Settings
+target="multi"  # one / multi
 
 # Double Check
 echo -e "${GREEN}=== Your Train Parameters ===${ENDCOLOR}"
-echo -e "Train data: ${GREEN}${data}${ENDCOLOR}"
-echo -e "Test tata: ${GREEN}${test_data}${ENDCOLOR}"
-echo -e "Criteria: ${GREEN}${criteria}${ENDCOLOR}"
-echo -e "Target: ${GREEN}${target}${ENDCOLOR}"
-echo -e "Method: ${GREEN}${method}${ENDCOLOR}"
+echo -e "Train Data: ${GREEN}${data}${ENDCOLOR}"
+echo -e "Train Criteria: ${GREEN}${criteria}${ENDCOLOR}"
+echo -e "Train Method: ${GREEN}${method}${ENDCOLOR}"
 echo -e "Background: ${GREEN}${bg}${ENDCOLOR}"
+echo -e "Test Data: ${GREEN}${test_data}${ENDCOLOR}"
+echo -e "Eval Criteria: ${GREEN}${eval_criteria}${ENDCOLOR}"
+echo -e "Eval Method: ${GREEN}${eval_method}${ENDCOLOR}"
+echo -e "Eval Background: ${GREEN}${eval_bg}${ENDCOLOR}"
+echo -e "Target: ${GREEN}${target}${ENDCOLOR}"
 sleep 1
 
 # python3 script
 python3 \
     tools/train.py \
-    --data ${data} \
-    --test_data ${test_data} \
+    --data "./data/TRI/train/${data}" \
     --criteria ${criteria} \
-    --target ${target} \
     --method ${method} \
-    --bg ${bg}
+    --bg ${bg} \
+    --test_data "./data/TRI/test/${test_data}" \
+    --eval_criteria ${eval_criteria} \
+    --eval_method ${eval_method} \
+    --eval_bg ${eval_bg} \
+    --target ${target} \

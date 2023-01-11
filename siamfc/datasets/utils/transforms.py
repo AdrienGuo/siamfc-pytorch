@@ -10,7 +10,7 @@ import torch
 
 from utils.file_organizer import create_dir, save_img
 
-from .. import ops
+from ... import ops
 
 __all__ = ['SiamFCTransforms', 'PCBTransforms']
 
