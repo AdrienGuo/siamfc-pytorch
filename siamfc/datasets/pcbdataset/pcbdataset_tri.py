@@ -16,8 +16,8 @@ from torchvision import transforms
 
 from utils.file_organizer import create_dir, save_img
 
-from ..augmentation.augmentation import PCBAugmentation
-from ..pcb_crop import get_pcb_crop
+from ..augmentation.pcb import PCBAugmentation
+from ..crops import get_pcb_crop
 
 
 class PCBDatasetTri(object):
@@ -28,40 +28,37 @@ class PCBDatasetTri(object):
 
     def __init__(
         self,
-        args, data_path, method, criteria,
-        bg: str,
-        mode: str
+        args,
+        mode: str,
+        augmentation: PCBAugmentation
     ) -> None:
         super(PCBDatasetTri, self).__init__()
 
         self.args = args
-        self.method = method
-        self.criteria = criteria
-        images, templates, searches = self._make_dataset(data_path)
+        self.method = args['method']
+        self.criteria = args['criteria']
+        images, templates, searches = self._make_dataset(args['data_path'])
         images, templates, searches = self._filter_dataset(
-            images, templates, searches, criteria)
+            images, templates, searches, args['criteria'])
         assert len(images) != 0, "ERROR, dataset is empty"
         self.images = images
         self.templates = templates
         self.searches = searches
 
-        pcb_crop = get_pcb_crop(method)
-        if method == "tri_origin":
+        pcb_crop = get_pcb_crop(args['method'])
+        if args['method'] == "tri_origin":
             # zf_size_min: smallest z size after res50 backbone
             zf_size_min = 10
             self.pcb_crop = pcb_crop(zf_size_min)
-        elif method == "tri_127_origin":
+        elif args['method'] == "tri_127_origin":
             self.pcb_crop = pcb_crop()
         else:
             assert False, "Method is wrong"
 
         # Augmentation
-        self.z_aug = PCBAugmentation(
-            clahe=args.template['clahe'],
-            flip=0.0)
-        self.x_aug = PCBAugmentation(
-            clahe=args.template['clahe'],
-            flip=0.0)
+        # TODO: Refactor
+        self.z_aug = augmentation['template']
+        self.x_aug = augmentation['search']
 
     def _make_dataset(self, dir_path):
         """

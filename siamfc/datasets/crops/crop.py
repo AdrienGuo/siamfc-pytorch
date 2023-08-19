@@ -1,5 +1,3 @@
-# Author: Adrien Guo
-# ============================
 # 負責裁切 z_img
 
 import cv2
@@ -58,13 +56,12 @@ def crop(img, box):
     Args:
         box: ([x1, y1, x2, y2])
     """
-
     img_size = img.shape[:2]
     box = np.array([
-        int(max(0, box[0])),
-        int(max(0, box[1])),
-        int(min(img_size[1], box[2])),
-        int(min(img_size[0], box[3]))
+        int(np.round(max(0, box[0]))),
+        int(np.round(max(0, box[1]))),
+        int(np.round(min(img_size[1], box[2]))),
+        int(np.round(min(img_size[0], box[3])))
     ])
     crop_img = img[box[1]: box[3], box[0]: box[2]]
     return crop_img

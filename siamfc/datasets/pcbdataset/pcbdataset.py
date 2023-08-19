@@ -9,13 +9,14 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from siamfc.box_transforms import center2corner, ratio2real, x1y1x2y2tox1y1wh
+from config.config import cfg
+from siamfc.datasets.box_transforms import center2corner, ratio2real, x1y1x2y2tox1y1wh
 from siamfc.datasets.utils.transforms import PCBTransforms
 from utils.file_organizer import create_dir, save_img
 from utils.painter import draw_boxes
 
-from ..augmentation.augmentation import PCBAugmentation
-from ..pcb_crop import get_pcb_crop
+from ..augmentation.pcb import PCBAugmentation
+from ..crops import get_pcb_crop
 
 
 class PCBDataset(Dataset):
@@ -32,7 +33,7 @@ class PCBDataset(Dataset):
         self,
         args: dict,
         mode: str,
-        augmentations: PCBAugmentation,
+        augmentation: PCBAugmentation,
         transforms: PCBTransforms = None
     ):
         self.args = args
@@ -75,20 +76,19 @@ class PCBDataset(Dataset):
                 search_size=255,
                 background=args['bg']
             )
+        elif args['method'] == "siamcar":
+            self.pcb_crop = pcb_crop(
+                template_size=127,
+                search_size=cfg.search_sz,
+                template_shift=cfg.train.template.shift,
+                search_shift=cfg.train.search.shift,
+            )
         else:
-            assert False, "METHOD is wrong"
+            assert False, "method is wrong"
 
         # Augmentations
-        if mode == "train":
-            self.z_aug = augmentations['template']
-            self.x_aug = augmentations['search']
-        else:
-            self.z_aug = PCBAugmentation(
-                clahe=args.template['clahe'],
-                flip=0.0)
-            self.x_aug = PCBAugmentation(
-                clahe=args.search['clahe'],
-                flip=0.0)
+        self.z_aug = augmentation['template']
+        self.x_aug = augmentation['search']
 
     def _make_dataset(self, directory: str, target: str):
         images = []
@@ -96,8 +96,10 @@ class PCBDataset(Dataset):
         searches = []
 
         # 標記錯誤的影像 & 會造成OOM的影像 & 太大張的影像
-        imgs_exclude = ['6_cae_cae_20200803_10.bmp', '20200629_ok (42).jpg', '16_bga_BGA_20220106_uniform_1.bmp']
-        mid_imgs_exclude = ['17_ic_ic_20200810_solder_40.bmp', '17_ic_Sot23_20200820_solder_81.bmp', '5_sod_sod (7).jpg']
+        imgs_exclude = ['6_cae_cae_20200803_10.bmp',
+                        '20200629_ok (42).jpg', '16_bga_BGA_20220106_uniform_1.bmp']
+        mid_imgs_exclude = ['17_ic_ic_20200810_solder_40.bmp',
+                            '17_ic_Sot23_20200820_solder_81.bmp', '5_sod_sod (7).jpg']
         small_imgs_exclude = ['']
         if self.criteria == "all":
             imgs_exclude = imgs_exclude + mid_imgs_exclude + small_imgs_exclude
@@ -134,16 +136,19 @@ class PCBDataset(Dataset):
                                 continue
                             item = img_path, cls[i]
                             images.append(item)
-                            templates.append([anno[i][0], anno[i][1], anno[i][2], anno[i][3]])
+                            templates.append(
+                                [anno[i][0], anno[i][1], anno[i][2], anno[i][3]])
                             box = list()
                             if target == "one":
                                 # 單目標偵測
-                                box.append([anno[i][0], anno[i][1], anno[i][2], anno[i][3]])
+                                box.append([anno[i][0], anno[i][1],
+                                            anno[i][2], anno[i][3]])
                             elif target == "multi":
                                 # 多目標偵測
                                 for j in range(len(cls)):
                                     if cls[j] == cls[i]:
-                                        box.append([anno[j][0], anno[j][1], anno[j][2], anno[j][3]])
+                                        box.append(
+                                            [anno[j][0], anno[j][1], anno[j][2], anno[j][3]])
                             box = np.stack(box).astype(np.float32)
                             searches.append(box)
                     else:
@@ -191,7 +196,7 @@ class PCBDataset(Dataset):
 
     def _get_positive_pair(self, idx):
         return self._get_image_anno(idx, self.templates), \
-               self._get_image_anno(idx, self.searches)
+            self._get_image_anno(idx, self.searches)
 
     def _get_negative_pair(self, idx):
         while True:
@@ -200,7 +205,7 @@ class PCBDataset(Dataset):
                 # idx 和 idx_neg 不是對應到同一張圖
                 break
         return self._get_image_anno(idx, self.templates), \
-               self._get_image_anno(idx_neg, self.searches)
+            self._get_image_anno(idx_neg, self.searches)
 
     def __len__(self) -> int:
         return len(self.images)
@@ -287,8 +292,11 @@ class PCBDataset(Dataset):
             z_img, x_img, z_box, gt_boxes = self.pcb_crop.get_data(
                 img, z_box, gt_boxes)
 
+        # z_img, x_img, z_box, gt_boxes = \
+        #     self.pcb_crop.get_data(img, z_box, gt_boxes)
+
         # Augmentations
-        z_img, z_box = self.z_aug(z_img, z_box)
+        z_img, _ = self.z_aug(z_img, z_box)
         x_img, gt_boxes = self.x_aug(x_img, gt_boxes)
 
         # Save images to ./image_check

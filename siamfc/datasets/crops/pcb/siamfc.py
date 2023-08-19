@@ -2,11 +2,11 @@ import cv2
 import ipdb
 import numpy as np
 
-from ... import ops
+from .... import ops
 from ...box_transforms import x1y1x2y2tox1y1wh
-from ..utils.process import resize, translate_and_crop
-from ..utils.transforms import CenterCrop, Compose, RandomCrop, RandomStretch
-from .crop import crop, crop_with_bg
+from ...utils.process import resize, translate_and_crop
+from ...utils.transforms import CenterCrop, Compose, RandomCrop, RandomStretch
+from ..crop import crop, crop_with_bg
 
 
 class PCBCropSiamFC:

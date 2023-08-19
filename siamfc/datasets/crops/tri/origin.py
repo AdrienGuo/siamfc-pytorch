@@ -2,8 +2,8 @@ import cv2
 import ipdb
 import numpy as np
 
-from ..utils.process import resize, translate_and_crop
-from .crop import crop_tri
+from ...utils.process import resize, translate_and_crop
+from ..crop import crop_tri
 
 
 class CropTriOrigin(object):

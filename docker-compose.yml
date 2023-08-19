@@ -4,13 +4,14 @@ services:
   siamfc:
     build: .
     container_name: SiamFC
+    # TODO: working_dir
     volumes:
       - ./:/workspace/SiamFC
     deploy:
       resources:
         reservations:
           devices:
-            - capabilities: ["gpu"]
+            - capabilities: [ "gpu" ]
               count: all
     stdin_open: true
     tty: true

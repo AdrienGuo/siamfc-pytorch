@@ -61,3 +61,51 @@ def x1y1x2y2tox1y1wh(boxes):
         return boxes_transformed
     else:
         assert False, "type error"
+
+
+def x1y1x2y2tocxcywh(boxes):
+    """Convert [x1, y1, x2, y2] -> [cx, cy, w, h]"""
+    boxes_transformed = np.zeros(boxes.shape)
+
+    if isinstance(boxes, np.ndarray):
+        if boxes.ndim == 1:
+            boxes_transformed = np.array([
+                (boxes[0] + boxes[2]) / 2,
+                (boxes[1] + boxes[3]) / 2,
+                (boxes[2] - boxes[0]) + 1,
+                (boxes[3] - boxes[1]) + 1
+            ])
+        elif boxes.ndim == 2:
+            boxes_transformed = np.stack([
+                (boxes[:, 0] + boxes[:, 2]) / 2,
+                (boxes[:, 1] + boxes[:, 3]) / 2,
+                (boxes[:, 2] - boxes[:, 0]) + 1,
+                (boxes[:, 3] - boxes[:, 1]) + 1
+            ], axis=1)
+        return boxes_transformed
+    else:
+        assert False, "type error"
+
+
+def cxcywhtox1y1x2y2(boxes):
+    """Convert [cx, cy, w, h] -> [x1, y1, x2, y2]"""
+    boxes_transformed = np.zeros(boxes.shape)
+
+    if isinstance(boxes, np.ndarray):
+        if boxes.ndim == 1:
+            boxes_transformed = np.array([
+                boxes[0] - ((boxes[2] - 1) / 2),  # cx - ((w-1) / 2)
+                boxes[1] - ((boxes[3] - 1) / 2),  # cy - ((h-1) / 2)
+                boxes[0] + ((boxes[2] - 1) / 2),  # cx + ((w-1) / 2)
+                boxes[1] + ((boxes[3] - 1) / 2),  # cy + ((h-1) / 2)
+            ])
+        elif boxes.ndim == 2:
+            boxes_transformed = np.stack([
+                boxes[:, 0] - ((boxes[:, 2] - 1) / 2),  # cx - ((w-1) / 2)
+                boxes[:, 1] - ((boxes[:, 3] - 1) / 2),  # cy - ((h-1) / 2)
+                boxes[:, 0] + ((boxes[:, 2] - 1) / 2),  # cx + ((w-1) / 2)
+                boxes[:, 1] + ((boxes[:, 3] - 1) / 2),  # cy + ((h-1) / 2)
+            ], axis=1)
+        return boxes_transformed
+    else:
+        assert False, "type error"

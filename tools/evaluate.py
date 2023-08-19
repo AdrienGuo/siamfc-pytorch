@@ -7,8 +7,10 @@ import torch
 from engines.evaluator import Evaluator
 from torch.utils.data import DataLoader
 
-from config.config import Config
+from config.config import cfg
 from siamfc import SiamFCTemplateMatch
+from siamfc.datasets.augmentation.pcb import PCBAugmentation
+from siamfc.datasets.pcbdataset import get_pcbdataset
 from siamfc.datasets.pcbdataset.pcbdataset import PCBDataset
 from siamfc.models.backbone.backbones import AlexNetV1
 from siamfc.models.head.heads import SiamFC
@@ -55,10 +57,8 @@ if __name__ == '__main__':
     parser.add_argument('--method', type=str, default='', help='official / origin')
     parser.add_argument('--bg', type=str, default='', help='background')
     args = parser.parse_args()
-
-    # Load config.yaml & Combine with args
-    cfg = Config(yaml_path="./config/config.yaml")
-    cfg.update_with_dict(vars(args))
+    # Update args into cfg
+    cfg.update(vars(args))
 
     # Create evaluator
     evaluator = Evaluator()
@@ -68,15 +68,25 @@ if __name__ == '__main__':
     model = load_model(cfg, cfg.model)
     matcher = build_matcher(model)
 
-    # Build dataloader
-    dataset = PCBDataset(
-        cfg,
-        cfg.data_path,
-        method=cfg.method,
-        criteria=cfg.criteria,
-        bg=cfg.bg,
-        mode="test"
-    )
+    # Dataset arguments
+    data_args = {
+        'data_path': cfg.data_path,
+        'method': cfg.method,
+        'criteria': cfg.criteria,
+        'bg': cfg.bg,
+        'target': cfg.target,
+    }
+
+    # Data augmentation
+    data_augmentation = {
+        'template': PCBAugmentation(cfg.test.template),
+        'search': PCBAugmentation(cfg.test.search)
+    }
+
+    pcb_dataset = get_pcbdataset(args.method)
+    dataset = pcb_dataset(
+        args=data_args, mode="test", augmentation=data_augmentation)
+
     assert len(dataset) != 0, "Data is empty"
     print(f"Data size: {len(dataset)}")
     dataloader = DataLoader(

@@ -1,8 +1,12 @@
 # Augmentations
 train:
   template:
-    clahe: true
     flip: 0.3
   search:
-    clahe: true
+    flip: 0.0
+
+test:
+  template:
+    flip: 0.0
+  search:
     flip: 0.0

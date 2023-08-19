@@ -27,6 +27,8 @@ class Evaluator(object):
                 preds.append(pred_boxes)
                 labels.append(gt_boxes)
 
+                # ipdb.set_trace()
+
         metrics = self.calculate_metrics(preds, labels)
         return metrics
 

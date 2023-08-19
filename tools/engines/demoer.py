@@ -7,13 +7,14 @@ from torch.utils.data import DataLoader
 
 from config.config import Config
 from siamfc import SiamFCTemplateMatch
-from siamfc.box_transforms import x1y1x2y2tox1y1wh
+from siamfc.datasets.box_transforms import x1y1x2y2tox1y1wh
 from siamfc.datasets.pcbdataset import get_pcbdataset
 from siamfc.models.backbone.backbones import AlexNetV1
 from siamfc.models.head.heads import SiamFC
 from siamfc.models.model_builder import SeperateNet, SiameseNet
 from utils.file_organizer import create_dir, create_dirs, save_img
 from utils.painter import draw_boxes
+from siamfc.datasets.augmentation.pcb import PCBAugmentation
 
 
 class Demoer(object):
@@ -65,13 +66,25 @@ class Demoer(object):
         return matcher
 
     def build_dataloader(self, data_path):
+        # Dataset arguments
+        data_args = {
+            'data_path': self.cfg.data,
+            'method': self.cfg.method,
+            'criteria': self.cfg.criteria,
+            'bg': self.cfg.bg,
+            'target': self.cfg.target,
+        }
+
+        # Data augmentation
+        data_augmentation = {
+            'template': PCBAugmentation(self.cfg.test.template),
+            'search': PCBAugmentation(self.cfg.test.search)
+        }
+
         pcb_dataset = get_pcbdataset(self.args.method)
         dataset = pcb_dataset(
-            self.cfg, data_path, self.args.method,
-            criteria=self.args.criteria,
-            bg=self.cfg.bg,
-            mode="test",
-        )
+            args=data_args, mode="test", augmentation=data_augmentation)
+
         assert len(dataset) != 0, "Data is empty"
         print(f"Data size: {len(dataset)}")
         dataloader = DataLoader(

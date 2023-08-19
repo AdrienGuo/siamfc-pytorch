@@ -7,7 +7,7 @@ ENDCOLOR="\e[0m"
 # Settings
 model="./pretrained/official/siamfc_alexnet_e50.pth"
 # model="./models/all_mid/ckpt100.pth"
-part="test"
+part="train"
 data="all"
 criteria="all"  # all / mid
 target="multi"  # one / multi

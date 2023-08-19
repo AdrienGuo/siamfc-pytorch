@@ -1,7 +1,7 @@
 import ipdb
 import numpy as np
 
-from ..utils.process import resize, translate_and_crop
+from ...utils.process import resize, translate_and_crop
 
 
 class CropTri127Origin:

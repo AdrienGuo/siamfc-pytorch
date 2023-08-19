@@ -9,10 +9,10 @@ from torch.utils.data import DataLoader
 
 from config.config import cfg
 from siamfc import SiamFCTemplateMatch
-from siamfc.datasets.augmentation.augmentation import PCBAugmentation
+from siamfc.datasets.augmentation.pcb import PCBAugmentation
 from siamfc.datasets.pcbdataset.pcbdataset import PCBDataset
 from siamfc.datasets.utils.transforms import PCBTransforms
-from siamfc.labels import create_labels
+from siamfc.labels.labels import create_labels
 from siamfc.losses import BalancedLoss
 from siamfc.models.backbone.backbones import AlexNetV1
 from siamfc.models.head.heads import SiamFC
@@ -20,6 +20,7 @@ from siamfc.models.model_builder import SeperateNet, SiameseNet
 from utils.average_meter import AverageMeter
 from utils.file_organizer import create_dir
 from utils.wandb import WandB
+from siamfc.labels.labels import Label
 
 from .evaluator import Evaluator
 
@@ -52,7 +53,7 @@ class Trainer(object):
             weight_decay=self.cfg.weight_decay,
             momentum=self.cfg.momentum
         )
-        
+
         # setup lr scheduler
         gamma = np.power(
             self.cfg.ultimate_lr / self.cfg.initial_lr,
@@ -62,6 +63,9 @@ class Trainer(object):
         # Setup evaluator
         self.evaluator = Evaluator()
 
+        # Setup label
+        self.label = Label()
+
     def build_dataloaders(self):
         def create_dataloader(dataset, batch_size, shuffle, num_workers):
             dataloader = DataLoader(
@@ -69,59 +73,70 @@ class Trainer(object):
                 batch_size=batch_size,
                 shuffle=shuffle,
                 num_workers=num_workers,
-                pin_memory=True
+                pin_memory=False
             )
             return dataloader
 
-        # setup transforms
-        transforms = PCBTransforms(
-            exemplar_sz=self.cfg.exemplar_sz,
-            instance_sz=self.cfg.instance_sz,
-            context=self.cfg.context)
-
-        # datasets arguments
-        train_args = {
-            'data_path': self.cfg.data,
-            'method': self.cfg.method,
-            'criteria': self.cfg.criteria,
-            'bg': self.cfg.bg,
-            'target': self.cfg.target,
+        # Datasets arguments
+        data_args = {
+            'train': {
+                'data_path': self.cfg.data,
+                'method': self.cfg.method,
+                'criteria': self.cfg.criteria,
+                'bg': self.cfg.bg,
+                'target': self.cfg.target,
+            },
+            'test': {
+                'data_path': self.cfg.test_data,
+                'method': self.cfg.method,
+                'criteria': self.cfg.criteria,
+                'bg': self.cfg.bg,
+                'target': self.cfg.target
+            },
+            'eval_train': {
+                'data_path': self.cfg.data,
+                'method': self.cfg.eval_method,
+                'criteria': self.cfg.eval_criteria,
+                'bg': self.cfg.eval_bg,
+                'target': self.cfg.target
+            },
+            'eval_test': {
+                'data_path': self.cfg.test_data,
+                'method': self.cfg.eval_method,
+                'criteria': self.cfg.eval_criteria,
+                'bg': self.cfg.eval_bg,
+                'target': self.cfg.target
+            }
         }
 
+        # Data augmentations
         data_augmentations = {
             'train': {
                 'template': PCBAugmentation(self.cfg.train.template),
                 'search': PCBAugmentation(self.cfg.train.search),
             },
             'test': {
-                
+                'template': PCBAugmentation(self.cfg.test.template),
+                'search': PCBAugmentation(self.cfg.test.search),
             }
         }
-        dataset = PCBDataset(train_args, mode="train", augmentations=data_augmentations['train'], transforms=transforms)
-        test_dataset = dataset
-        eval_dataset = dataset
-        test_eval_dataset = dataset
 
-        # test_dataset = PCBDataset(
-        #     self.cfg, self.cfg.test_data,
-        #     method=self.cfg.method,
-        #     criteria=self.cfg.criteria,
-        #     bg=self.cfg.bg,
-        #     mode="test",
-        #     transforms=transforms)
-        # eval_dataset = PCBDataset(
-        #     self.cfg, self.cfg.data,
-        #     method=self.cfg.eval_method,
-        #     criteria=self.cfg.eval_criteria,
-        #     bg=self.cfg.eval_bg,
-        #     mode="test")
-        # test_eval_dataset = PCBDataset(
-        #     self.cfg, self.cfg.test_data,
-        #     method=self.cfg.eval_method,
-        #     criteria=self.cfg.eval_criteria,
-        #     bg=self.cfg.eval_bg,
-        #     mode="test")
+        # Setup transforms (for SiamFC only)
+        transforms = PCBTransforms(
+            exemplar_sz=self.cfg.exemplar_sz,
+            instance_sz=self.cfg.instance_sz,
+            context=self.cfg.context)
+
+        dataset = PCBDataset(data_args['train'], mode="train",
+                             augmentation=data_augmentations['train'], transforms=transforms)
         assert len(dataset) != 0, "Data is empty"
+        test_dataset = PCBDataset(
+            data_args['test'], mode="test", augmentation=data_augmentations['test'])
+        eval_dataset = PCBDataset(
+            data_args['eval_train'], mode="test", augmentation=data_augmentations['test'])
+        test_eval_dataset = PCBDataset(
+            data_args['eval_test'], mode="test", augmentation=data_augmentations['test'])
+
         print(f"Train data size: {len(dataset)}")
         print(f"Test data size: {len(test_dataset)}")
         print(f"Train Eval data size: {len(eval_dataset)}")
@@ -132,18 +147,22 @@ class Trainer(object):
         self.cfg.update({'Test Eval Data Size': len(test_eval_dataset)})
 
         # dataloaders
-        self.train_loader = create_dataloader(dataset, batch_size=self.cfg.batch_size, shuffle=True, num_workers=self.cfg.num_workers)
-        self.test_loader = create_dataloader(test_dataset, batch_size=self.cfg.batch_size, shuffle=True, num_workers=self.cfg.num_workers)
-        self.eval_loader = create_dataloader(eval_dataset, batch_size=1, shuffle=False, num_workers=8)
-        self.eval_test_loader = create_dataloader(test_eval_dataset, batch_size=1, shuffle=False, num_workers=8)
+        self.train_loader = create_dataloader(
+            dataset, batch_size=self.cfg.batch_size, shuffle=True, num_workers=self.cfg.num_workers)
+        self.test_loader = create_dataloader(
+            test_dataset, batch_size=self.cfg.batch_size, shuffle=True, num_workers=self.cfg.num_workers)
+        self.eval_loader = create_dataloader(
+            eval_dataset, batch_size=1, shuffle=False, num_workers=8)
+        self.eval_test_loader = create_dataloader(
+            test_eval_dataset, batch_size=1, shuffle=False, num_workers=8)
 
     def train(self):
         self.model.train()
-        model_name = "Flip_all_all"
+        model_name = "siamcar_x600_Shift64_Flip0.3_all_all"
 
         # Initialize WandB
         wandb = WandB(
-            name=model_name, config=self.cfg, init=False)
+            name=model_name, config=self.cfg, init=True)
 
         # Training
         for epoch in range(self.cfg.epochs):
@@ -160,7 +179,8 @@ class Trainer(object):
             if (epoch == 0) or (epoch + 1 == self.cfg.epochs) \
                     or ((epoch + 1) % self.cfg.eval_freq == 0):
                 train_metrics = self._evaluate(self.model, self.eval_loader)
-                test_metrics = self._evaluate(self.model, self.eval_test_loader)
+                test_metrics = self._evaluate(
+                    self.model, self.eval_test_loader)
                 epoch_info['Train'].update(train_metrics)
                 epoch_info['Test'].update(test_metrics)
 
@@ -171,7 +191,7 @@ class Trainer(object):
             # Update lr at each epoch
             self.lr_scheduler.step()
 
-            # self._save_checkpoint(epoch+1, dir_name=model_name)
+            self._save_checkpoint(epoch+1, dir_name=model_name)
 
     def train_one_epoch(self):
         self.model.train()
@@ -180,11 +200,16 @@ class Trainer(object):
         for iter, data in enumerate(self.train_loader):
             z_img = data['z_img'].to(self.device)
             x_img = data['x_img'].to(self.device)
+            gt_boxes = data['gt_boxes'].to(self.device)
             # responses: (B, 1, 15, 15)
             responses = self.model(z_img, x_img)
 
             # TODO: labels 的作法
-            labels = self._create_labels(responses.size())
+            # labels: (B, 1, H, W)
+            labels = self.label.create_labels(
+                responses.size(), x_img.size(), gt_boxes)
+
+            # labels = self._create_labels(responses.size())
             # labels = create_labels(
             #     responses.size(), self.cfg).to(self.device)
 

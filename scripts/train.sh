@@ -7,12 +7,12 @@ ENDCOLOR="\e[0m"
 # Train Settings
 data="all"  # all / tmp
 criteria="all"  # all / mid
-method="siamfc"  # siamcar / origin / official_origin / siamfc
+method="siamcar"  # siamcar / origin / official_origin / siamfc
 bg="All"  # background
 # Test Settings
 test_data="all"  # all / tmp
 # Evaluate Settings
-eval_criteria="all"  # all / mid
+eval_criteria="mid"  # all / mid
 eval_method="origin"  # siamcar / origin / official_origin / siamfc
 eval_bg="1.0"
 # Others Settings
